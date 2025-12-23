@@ -1,0 +1,14 @@
+{
+  "name": "@washpostgraphics/spike-globe",
+  "main": "8489cc95a03565fd@287.js",
+  "version": "287.0.0",
+  "homepage": "https://observablehq.com/@washpostgraphics/spike-globe",
+  "author": {
+    "name": "PostGraphics",
+    "url": "https://observablehq.com/@washpostgraphics"
+  },
+  "type": "module",
+  "peerDependencies": {
+    "@observablehq/runtime": "4 - 5"
+  }
+}
