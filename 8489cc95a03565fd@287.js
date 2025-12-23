@@ -118,6 +118,9 @@ async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,viewo
   render();
 
   let spin = true;
+  let rotation = 0;
+  let currentRotationSpeed = settings.rotationSpeed;
+  let targetRotationSpeed = settings.rotationSpeed;
  
   d3.geoInertiaDrag(svg, _ => {
     spin = false;
@@ -127,6 +130,7 @@ async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,viewo
 
   viewofSettings.addEventListener("input", () => {
     settings = {...viewofSettings.value};
+    targetRotationSpeed = settings.rotationSpeed;
     render({transition: true});
   });
 
@@ -138,8 +142,10 @@ async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,viewo
   
   yield svg.node();
   
-  for (let x = 0; spin; ++x) {
-    projection.rotate([x * settings.rotationSpeed, 0, 0]);
+  for (; spin;) {
+    currentRotationSpeed += (targetRotationSpeed - currentRotationSpeed) * 0.12;
+    rotation += currentRotationSpeed;
+    projection.rotate([rotation, 0, 0]);
     render();
     yield svg.node();
     await visibility();
