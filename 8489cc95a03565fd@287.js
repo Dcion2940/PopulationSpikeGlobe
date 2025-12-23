@@ -6,7 +6,7 @@ md`# Spike Globe
 資料來源： [Natural Earth](https://www.naturalearthdata.com/downloads/110m-cultural-vectors/)。`
 )}
 
-async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,settings,filteredGeo,maxPopulation,visibility)
+async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,viewofSettings,viewofCountrySelection,maxPopulation,visibility)
 {
   const svg = d3.create("svg")
       .attr("class", "globe")
@@ -23,26 +23,22 @@ async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,setti
       .data(worldGeo.features)
     .enter().append("path")
       .attr("class", "country");
-  
-  const spikes = svg.selectAll(".spike")
-      .data(filteredGeo.features, d => d.properties.ISO_A3)
-    .enter().append("polyline")
-      .attr("class", "spike")
-      .attr("fill-opacity", settings.spikeOpacity);
 
-  const labels = svg.append("g")
-      .attr("class", "spike-labels")
-    .selectAll("text")
-      .data(filteredGeo.features, d => d.properties.ISO_A3)
-    .enter().append("text")
-      .attr("class", "spike-label")
-      .attr("text-anchor", "middle")
-      .attr("dy", "-0.35em");
+  const labelsGroup = svg.append("g")
+      .attr("class", "spike-labels");
 
+  let spikes = svg.selectAll(".spike");
+  let labels = labelsGroup.selectAll(".spike-label");
+
+  let settings = {...viewofSettings.value};
+  let selection = new Set(viewofCountrySelection.value);
   const formatNumber = new Intl.NumberFormat("en", {notation: "compact"});
+
   const heightScale = d3.scaleLinear()
       .domain([0, maxPopulation])
       .range([0, settings.maxSpikeHeight]);
+
+  const getId = d => d.properties.ISO_A3 || d.properties.ADMIN;
 
   function getLabelText(d){
     const name = d.properties.ADMIN;
@@ -53,10 +49,38 @@ async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,setti
     return "";
   }
 
-  function render(){
+  function updateData(){
+    const features = worldGeo.features.filter(d => selection.has(getId(d)));
+
+    spikes = spikes.data(features, getId);
+    spikes.exit().remove();
+    spikes = spikes.enter().append("polyline")
+        .attr("class", "spike")
+      .merge(spikes);
+
+    labels = labels.data(features, getId);
+    labels.exit().remove();
+    labels = labels.enter().append("text")
+        .attr("class", "spike-label")
+        .attr("text-anchor", "middle")
+        .attr("dy", "-0.35em")
+      .merge(labels);
+  }
+
+  function render({transition = false} = {}){
     sphere.attr("d", path);
     countries.attr("d", path);
-    spikes
+    heightScale.range([0, settings.maxSpikeHeight]);
+
+    const targetSpikes = transition
+      ? spikes.transition().duration(350).ease(d3.easeCubicOut)
+      : spikes;
+
+    const targetLabels = transition
+      ? labels.transition().duration(350).ease(d3.easeCubicOut)
+      : labels;
+
+    targetSpikes
         .classed("hide", d => !path({ type: "Point", coordinates: d.base }))
         .attr("points", d => {
           const p = projection(d.base),
@@ -72,7 +96,7 @@ async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,setti
         })
         .attr("fill-opacity", settings.spikeOpacity);
 
-    labels
+    targetLabels
         .text(getLabelText)
         .classed("hide", d => !path({ type: "Point", coordinates: d.base }))
         .style("display", settings.showNames || settings.showNumbers ? null : "none")
@@ -89,7 +113,10 @@ async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,setti
           return tip[1];
         });
   }
-  
+
+  updateData();
+  render();
+
   let spin = true;
  
   d3.geoInertiaDrag(svg, _ => {
@@ -97,6 +124,17 @@ async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,setti
     spikes.classed("fast-fade", 1);
     render();
   }, projection);
+
+  viewofSettings.addEventListener("input", () => {
+    settings = {...viewofSettings.value};
+    render({transition: true});
+  });
+
+  viewofCountrySelection.addEventListener("input", () => {
+    selection = new Set(viewofCountrySelection.value);
+    updateData();
+    render({transition: true});
+  });
   
   yield svg.node();
   
@@ -109,7 +147,7 @@ async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,setti
 }
 
 function _viewofSettings(html){
-  const form = html`<form class="control-panel">
+  const form = html`<form class="control-panel" style="--panel-opacity: 1;">
     <div class="panel-header">參數調整</div>
     <label class="control-row">
       <span>調整模式</span>
@@ -138,6 +176,11 @@ function _viewofSettings(html){
       <input name="rotationSpeed" type="range" min="0.05" max="0.6" step="0.05" value="0.25" />
       <span class="value" data-for="rotationSpeed">0.25</span>
     </label>
+    <label class="control-row">
+      <span>浮動窗格透明度</span>
+      <input name="panelOpacity" type="range" min="0.4" max="1" step="0.05" value="1" />
+      <span class="value" data-for="panelOpacity">1</span>
+    </label>
     <label class="control-row checkbox">
       <input name="showNumbers" type="checkbox" />
       <span>顯示人口數字</span>
@@ -145,10 +188,6 @@ function _viewofSettings(html){
     <label class="control-row checkbox">
       <input name="showNames" type="checkbox" />
       <span>顯示國家名稱</span>
-    </label>
-    <label class="control-row checkbox">
-      <input name="panelTransparent" type="checkbox" />
-      <span>浮動窗格半透明</span>
     </label>
     <button class="apply-button" type="button" disabled>確認套用</button>
   </form>`;
@@ -158,7 +197,7 @@ function _viewofSettings(html){
   );
   const applyButton = form.querySelector(".apply-button");
   const modeSelect = form.querySelector("select[name=mode]");
-  const panelTransparent = form.querySelector("input[name=panelTransparent]");
+  const panelOpacity = form.querySelector("input[name=panelOpacity]");
 
   const readValues = () => ({
     mode: modeSelect.value,
@@ -166,9 +205,9 @@ function _viewofSettings(html){
     spikeWidth: Number(form.spikeWidth.value),
     spikeOpacity: Number(form.spikeOpacity.value),
     rotationSpeed: Number(form.rotationSpeed.value),
+    panelOpacity: Number(form.panelOpacity.value),
     showNumbers: form.showNumbers.checked,
-    showNames: form.showNames.checked,
-    panelTransparent: panelTransparent.checked
+    showNames: form.showNames.checked
   });
 
   const updateValueLabels = () => {
@@ -176,33 +215,62 @@ function _viewofSettings(html){
     valueEls.get("spikeWidth").textContent = form.spikeWidth.value;
     valueEls.get("spikeOpacity").textContent = form.spikeOpacity.value;
     valueEls.get("rotationSpeed").textContent = form.rotationSpeed.value;
+    valueEls.get("panelOpacity").textContent = form.panelOpacity.value;
   };
 
-  const setPanelTransparency = () => {
-    form.classList.toggle("panel--transparent", panelTransparent.checked);
+  const updatePanelOpacity = () => {
+    const value = Number(panelOpacity.value);
+    form.style.setProperty("--panel-opacity", value);
+    form.classList.toggle("panel--transparent", value < 1);
   };
+
+  let allowCommit = false;
 
   const commit = () => {
     form.value = readValues();
+    allowCommit = true;
     form.dispatchEvent(new Event("input", {bubbles: true}));
+    requestAnimationFrame(() => {
+      allowCommit = false;
+    });
   };
 
-  form.addEventListener("input", event => {
-    if (event.target.name === "panelTransparent") {
-      setPanelTransparency();
+  const maybeBlock = event => {
+    if (modeSelect.value === "static" && !allowCommit) {
+      event.stopPropagation();
     }
-    if (event.target.matches("input[type=range]")) {
+  };
+
+  Array.from(form.querySelectorAll("input[type=range]")).forEach(input => {
+    input.addEventListener("input", event => {
       updateValueLabels();
-    }
-    if (event.target.name === "mode") {
-      applyButton.disabled = modeSelect.value === "dynamic";
+      if (input.name === "panelOpacity") {
+        updatePanelOpacity();
+      }
       if (modeSelect.value === "dynamic") {
         commit();
+      } else {
+        maybeBlock(event);
       }
-      return;
-    }
+    });
+  });
+
+  Array.from(form.querySelectorAll("input[type=checkbox]")).forEach(input => {
+    input.addEventListener("change", event => {
+      if (modeSelect.value === "dynamic") {
+        commit();
+      } else {
+        maybeBlock(event);
+      }
+    });
+  });
+
+  modeSelect.addEventListener("change", event => {
+    applyButton.disabled = modeSelect.value === "dynamic";
     if (modeSelect.value === "dynamic") {
       commit();
+    } else {
+      maybeBlock(event);
     }
   });
 
@@ -211,15 +279,11 @@ function _viewofSettings(html){
   });
 
   updateValueLabels();
-  setPanelTransparency();
+  updatePanelOpacity();
   applyButton.disabled = modeSelect.value === "dynamic";
   form.value = readValues();
 
   return form;
-}
-
-function _settings(Generators,viewofSettings){
-  return Generators.input(viewofSettings);
 }
 
 function _viewofCountrySelection(html,worldGeo){
@@ -340,10 +404,6 @@ function _viewofCountrySelection(html,worldGeo){
   return container;
 }
 
-function _countrySelection(Generators,viewofCountrySelection){
-  return Generators.input(viewofCountrySelection);
-}
-
 function _world(FileAttachment){return(
 FileAttachment("ne_110m_admin_0_countries_lakes.json").json()
 )}
@@ -356,12 +416,6 @@ function _worldGeo(topojson,world,base)
     return;
   });
   return json;
-}
-
-function _filteredGeo(worldGeo,countrySelection){
-  const selected = countrySelection;
-  const features = worldGeo.features.filter(d => selected.has(d.properties.ISO_A3 || d.properties.ADMIN));
-  return {...worldGeo, features};
 }
 
 function _size(width){return(
@@ -378,7 +432,7 @@ d3.geoPath(projection)
 )}
 
 function _d3(require){return(
-require("d3-array@2", "d3-geo@1", "d3-inertia@0.1.0", "d3-scale@3", "d3-selection@1")
+require("d3-array@2", "d3-geo@1", "d3-inertia@0.1.0", "d3-scale@3", "d3-selection@1", "d3-transition@1", "d3-ease@1")
 )}
 
 function _geometric(require){return(
@@ -443,7 +497,7 @@ body {
   top: 1rem;
   right: 1rem;
   z-index: 10;
-  background: #ffffff;
+  background: rgba(255, 255, 255, var(--panel-opacity, 1));
   border-radius: 12px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
   padding: 1rem 1.2rem;
@@ -453,7 +507,6 @@ body {
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
 .control-panel.panel--transparent {
-  background: rgba(255, 255, 255, 0.7);
   backdrop-filter: blur(6px);
 }
 .panel-header {
@@ -608,13 +661,10 @@ export default function define(runtime, observer) {
   main.builtin("FileAttachment", runtime.fileAttachments(name => fileAttachments.get(name)));
   main.variable(observer()).define(["md"], _1);
   main.variable(observer("viewof settings")).define("viewof settings", ["html"], _viewofSettings);
-  main.variable(observer("settings")).define("settings", ["Generators", "viewof settings"], _settings);
-  main.variable(observer()).define(["d3","size","styles","worldGeo","path","projection","geometric","spike","settings","filteredGeo","maxPopulation","visibility"], _2);
   main.variable(observer("viewof countrySelection")).define("viewof countrySelection", ["html","worldGeo"], _viewofCountrySelection);
-  main.variable(observer("countrySelection")).define("countrySelection", ["Generators", "viewof countrySelection"], _countrySelection);
+  main.variable(observer()).define(["d3","size","styles","worldGeo","path","projection","geometric","spike","viewof settings","viewof countrySelection","maxPopulation","visibility"], _2);
   main.variable(observer("world")).define("world", ["FileAttachment"], _world);
   main.variable(observer("worldGeo")).define("worldGeo", ["topojson","world","base"], _worldGeo);
-  main.variable(observer("filteredGeo")).define("filteredGeo", ["worldGeo","countrySelection"], _filteredGeo);
   main.variable(observer("size")).define("size", ["width"], _size);
   main.variable(observer("projection")).define("projection", ["d3","size"], _projection);
   main.variable(observer("path")).define("path", ["d3","projection"], _path);
