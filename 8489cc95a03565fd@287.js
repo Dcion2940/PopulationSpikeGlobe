@@ -1,23 +1,19 @@
-import define1 from "./0d64f2229c613239@129.js";
-
 function _1(md){return(
 md`# Spike Globe
 
-This notebook contains code to produce a simple spike globe, similar to those seen in the Washington Post article [“Six months, six countries, six families — and one unrelenting, unforgiving epidemic”](https://www.washingtonpost.com/graphics/2020/world/coronavirus-pandemic-lives-upended/), published on July 9, 2020.
+這是一個以人口資料呈現的 3D spike globe，讓你從地球視角理解各國人口分布的差異。
 
-To produce this [psuedo-3D](https://en.wikipedia.org/wiki/2.5D) effect, rotate each spike according to the angle between the center of the globe and the base of the spike. When done, you should be able to draw a straight line from the center of the globe through the spike’s base and ending at the spike’s tip.
-
-The below map shows estimated population by country, 2017, using data from [Natural Earth](https://www.naturalearthdata.com/downloads/110m-cultural-vectors/).`
+資料來源： [Natural Earth](https://www.naturalearthdata.com/downloads/110m-cultural-vectors/)。`
 )}
 
-async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,height,visibility)
+async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,viewofSettings,viewofCountrySelection,maxPopulation,visibility)
 {
   const svg = d3.create("svg")
       .attr("class", "globe")
       .attr("width", size)
       .attr("height", size);
   
-  svg.append("style").html(styles);  
+  svg.append("style").html(styles);
 
   const sphere = svg.append("path")
       .datum({type: "Sphere"})
@@ -27,57 +23,392 @@ async function* _2(d3,size,styles,worldGeo,path,projection,geometric,spike,heigh
       .data(worldGeo.features)
     .enter().append("path")
       .attr("class", "country");
-  
-  const spikes = svg.selectAll(".spike")
-      .data(worldGeo.features)
-    .enter().append("polyline")
-      .attr("class", "spike");
-  
-  function render(){
+
+  const labelsGroup = svg.append("g")
+      .attr("class", "spike-labels");
+
+  let spikes = svg.selectAll(".spike");
+  let labels = labelsGroup.selectAll(".spike-label");
+
+  let settings = {...viewofSettings.value};
+  let selection = new Set(viewofCountrySelection.value);
+  const formatNumber = new Intl.NumberFormat("en", {notation: "compact"});
+
+  const heightScale = d3.scaleLinear()
+      .domain([0, maxPopulation])
+      .range([0, settings.maxSpikeHeight]);
+
+  const getId = d => d.properties.ISO_A3 || d.properties.ADMIN;
+
+  function getLabelText(d){
+    const name = d.properties.ADMIN;
+    const value = formatNumber.format(d.properties.POP_EST);
+    if (settings.showNames && settings.showNumbers) return `${name} (${value})`;
+    if (settings.showNames) return name;
+    if (settings.showNumbers) return value;
+    return "";
+  }
+
+  function updateData(){
+    const features = worldGeo.features.filter(d => selection.has(getId(d)));
+
+    spikes = spikes.data(features, getId);
+    spikes.exit().remove();
+    spikes = spikes.enter().append("polyline")
+        .attr("class", "spike")
+      .merge(spikes);
+
+    labels = labels.data(features, getId);
+    labels.exit().remove();
+    labels = labels.enter().append("text")
+        .attr("class", "spike-label")
+        .attr("text-anchor", "middle")
+        .attr("dy", "-0.35em")
+      .merge(labels);
+  }
+
+  function render({transition = false} = {}){
     sphere.attr("d", path);
     countries.attr("d", path);
-    spikes
+    heightScale.range([0, settings.maxSpikeHeight]);
+
+    const targetSpikes = transition
+      ? spikes.transition().duration(350).ease(d3.easeCubicOut)
+      : spikes;
+
+    const targetLabels = transition
+      ? labels.transition().duration(350).ease(d3.easeCubicOut)
+      : labels;
+
+    targetSpikes
         .classed("hide", d => !path({ type: "Point", coordinates: d.base }))
         .attr("points", d => {
           const p = projection(d.base),
                 a = geometric.lineAngle([[size / 2, size / 2], p]);
-      
+
           return spike()
               .x(p[0])
               .y(p[1])
               .angle(a)
-              .width(7)
-              .height(height(d.properties.POP_EST))
+              .width(settings.spikeWidth)
+              .height(heightScale(d.properties.POP_EST))
               ();
+        })
+        .attr("fill-opacity", settings.spikeOpacity);
+
+    targetLabels
+        .text(getLabelText)
+        .classed("hide", d => !path({ type: "Point", coordinates: d.base }))
+        .style("display", settings.showNames || settings.showNumbers ? null : "none")
+        .attr("x", d => {
+          const p = projection(d.base);
+          const a = geometric.lineAngle([[size / 2, size / 2], p]);
+          const tip = geometric.pointTranslate(p, a, heightScale(d.properties.POP_EST));
+          return tip[0];
+        })
+        .attr("y", d => {
+          const p = projection(d.base);
+          const a = geometric.lineAngle([[size / 2, size / 2], p]);
+          const tip = geometric.pointTranslate(p, a, heightScale(d.properties.POP_EST));
+          return tip[1];
         });
   }
-  
+
+  updateData();
+  render();
+
   let spin = true;
+  let rotation = 0;
+  let currentRotationSpeed = settings.rotationSpeed;
+  let targetRotationSpeed = settings.rotationSpeed;
  
   d3.geoInertiaDrag(svg, _ => {
     spin = false;
     spikes.classed("fast-fade", 1);
     render();
   }, projection);
+
+  viewofSettings.addEventListener("input", () => {
+    settings = {...viewofSettings.value};
+    targetRotationSpeed = settings.rotationSpeed;
+    render({transition: true});
+  });
+
+  viewofCountrySelection.addEventListener("input", () => {
+    selection = new Set(viewofCountrySelection.value);
+    updateData();
+    render({transition: true});
+  });
   
   yield svg.node();
   
-  for (let x = 0; spin; ++x) {
-    projection.rotate([x / 4, 0, 0]);
+  for (; spin;) {
+    currentRotationSpeed += (targetRotationSpeed - currentRotationSpeed) * 0.12;
+    rotation += currentRotationSpeed;
+    projection.rotate([rotation, 0, 0]);
     render();
     yield svg.node();
     await visibility();
   }
 }
 
+function _viewofSettings(html){
+  const form = html`<form class="control-panel" style="--panel-opacity: 1;">
+    <div class="panel-header">參數調整</div>
+    <label class="control-row">
+      <span>調整模式</span>
+      <select name="mode">
+        <option value="dynamic" selected>動態調整（即時生效）</option>
+        <option value="static">靜態調整（按下確認）</option>
+      </select>
+    </label>
+    <label class="control-row">
+      <span>最大 spike 高度</span>
+      <input name="maxSpikeHeight" type="range" min="80" max="300" step="10" value="200" />
+      <span class="value" data-for="maxSpikeHeight">200</span>
+    </label>
+    <label class="control-row">
+      <span>spike 寬度</span>
+      <input name="spikeWidth" type="range" min="2" max="16" step="1" value="7" />
+      <span class="value" data-for="spikeWidth">7</span>
+    </label>
+    <label class="control-row">
+      <span>spike 透明度</span>
+      <input name="spikeOpacity" type="range" min="0.1" max="1" step="0.05" value="0.3" />
+      <span class="value" data-for="spikeOpacity">0.3</span>
+    </label>
+    <label class="control-row">
+      <span>旋轉速度</span>
+      <input name="rotationSpeed" type="range" min="0.05" max="0.6" step="0.05" value="0.25" />
+      <span class="value" data-for="rotationSpeed">0.25</span>
+    </label>
+    <label class="control-row">
+      <span>浮動窗格透明度</span>
+      <input name="panelOpacity" type="range" min="0.4" max="1" step="0.05" value="1" />
+      <span class="value" data-for="panelOpacity">1</span>
+    </label>
+    <label class="control-row checkbox">
+      <input name="showNumbers" type="checkbox" />
+      <span>顯示人口數字</span>
+    </label>
+    <label class="control-row checkbox">
+      <input name="showNames" type="checkbox" />
+      <span>顯示國家名稱</span>
+    </label>
+    <button class="apply-button" type="button" disabled>確認套用</button>
+  </form>`;
 
-function _3(toc){return(
-toc({selector: "h2", heading: "Jump to:"})
-)}
+  const valueEls = new Map(
+    Array.from(form.querySelectorAll(".value")).map(el => [el.dataset.for, el])
+  );
+  const applyButton = form.querySelector(".apply-button");
+  const modeSelect = form.querySelector("select[name=mode]");
+  const panelOpacity = form.querySelector("input[name=panelOpacity]");
 
-function _4(md){return(
-md`## Data`
-)}
+  const readValues = () => ({
+    mode: modeSelect.value,
+    maxSpikeHeight: Number(form.maxSpikeHeight.value),
+    spikeWidth: Number(form.spikeWidth.value),
+    spikeOpacity: Number(form.spikeOpacity.value),
+    rotationSpeed: Number(form.rotationSpeed.value),
+    panelOpacity: Number(form.panelOpacity.value),
+    showNumbers: form.showNumbers.checked,
+    showNames: form.showNames.checked
+  });
+
+  const updateValueLabels = () => {
+    valueEls.get("maxSpikeHeight").textContent = form.maxSpikeHeight.value;
+    valueEls.get("spikeWidth").textContent = form.spikeWidth.value;
+    valueEls.get("spikeOpacity").textContent = form.spikeOpacity.value;
+    valueEls.get("rotationSpeed").textContent = form.rotationSpeed.value;
+    valueEls.get("panelOpacity").textContent = form.panelOpacity.value;
+  };
+
+  const updatePanelOpacity = () => {
+    const value = Number(panelOpacity.value);
+    form.style.setProperty("--panel-opacity", value);
+    form.classList.toggle("panel--transparent", value < 1);
+  };
+
+  let allowCommit = false;
+
+  const commit = () => {
+    form.value = readValues();
+    allowCommit = true;
+    form.dispatchEvent(new Event("input", {bubbles: true}));
+    requestAnimationFrame(() => {
+      allowCommit = false;
+    });
+  };
+
+  const maybeBlock = event => {
+    if (modeSelect.value === "static" && !allowCommit) {
+      event.stopPropagation();
+    }
+  };
+
+  Array.from(form.querySelectorAll("input[type=range]")).forEach(input => {
+    input.addEventListener("input", event => {
+      updateValueLabels();
+      if (input.name === "panelOpacity") {
+        updatePanelOpacity();
+      }
+      if (modeSelect.value === "dynamic") {
+        commit();
+      } else {
+        maybeBlock(event);
+      }
+    });
+  });
+
+  Array.from(form.querySelectorAll("input[type=checkbox]")).forEach(input => {
+    input.addEventListener("change", event => {
+      if (modeSelect.value === "dynamic") {
+        commit();
+      } else {
+        maybeBlock(event);
+      }
+    });
+  });
+
+  modeSelect.addEventListener("change", event => {
+    applyButton.disabled = modeSelect.value === "dynamic";
+    if (modeSelect.value === "dynamic") {
+      commit();
+    } else {
+      maybeBlock(event);
+    }
+  });
+
+  applyButton.addEventListener("click", () => {
+    commit();
+  });
+
+  updateValueLabels();
+  updatePanelOpacity();
+  applyButton.disabled = modeSelect.value === "dynamic";
+  form.value = readValues();
+
+  return form;
+}
+
+function _viewofCountrySelection(html,worldGeo){
+  const container = html`<section class="country-filter">
+    <div class="filter-header">
+      <h2>國家篩選</h2>
+      <div class="filter-actions">
+        <button type="button" data-action="select-all">全選</button>
+        <button type="button" data-action="clear">全不選</button>
+      </div>
+    </div>
+    <label class="filter-search">
+      <span>搜尋國家</span>
+      <input type="search" placeholder="輸入國家名稱" />
+    </label>
+    <div class="filter-count"></div>
+    <div class="filter-table">
+      <table>
+        <thead>
+          <tr>
+            <th>顯示</th>
+            <th>國家</th>
+            <th>人口（估計）</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>`;
+
+  const searchInput = container.querySelector("input[type=search]");
+  const tbody = container.querySelector("tbody");
+  const count = container.querySelector(".filter-count");
+  const selectAllButton = container.querySelector("button[data-action=select-all]");
+  const clearButton = container.querySelector("button[data-action=clear]");
+
+  const data = worldGeo.features
+    .map(d => ({
+      id: d.properties.ISO_A3 || d.properties.ADMIN,
+      name: d.properties.ADMIN,
+      population: d.properties.POP_EST
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const selection = new Set(data.map(d => d.id));
+  const formatter = new Intl.NumberFormat("en", {notation: "compact"});
+
+  const updateCount = () => {
+    count.textContent = `已選擇 ${selection.size} / ${data.length} 個國家`;
+  };
+
+  const updateValue = () => {
+    container.value = new Set(selection);
+    container.dispatchEvent(new Event("input", {bubbles: true}));
+    updateCount();
+  };
+
+  const rows = data.map(d => {
+    const row = document.createElement("tr");
+    row.dataset.name = d.name.toLowerCase();
+    row.dataset.id = d.id;
+
+    const checkboxCell = document.createElement("td");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        selection.add(d.id);
+      } else {
+        selection.delete(d.id);
+      }
+      updateValue();
+    });
+    checkboxCell.appendChild(checkbox);
+
+    const nameCell = document.createElement("td");
+    nameCell.textContent = d.name;
+
+    const popCell = document.createElement("td");
+    popCell.textContent = formatter.format(d.population);
+
+    row.appendChild(checkboxCell);
+    row.appendChild(nameCell);
+    row.appendChild(popCell);
+    tbody.appendChild(row);
+    return row;
+  });
+
+  const applySearch = () => {
+    const query = searchInput.value.trim().toLowerCase();
+    rows.forEach(row => {
+      row.style.display = !query || row.dataset.name.includes(query) ? "" : "none";
+    });
+  };
+
+  searchInput.addEventListener("input", applySearch);
+
+  selectAllButton.addEventListener("click", () => {
+    selection.clear();
+    data.forEach(d => selection.add(d.id));
+    rows.forEach(row => {
+      row.querySelector("input[type=checkbox]").checked = true;
+    });
+    updateValue();
+  });
+
+  clearButton.addEventListener("click", () => {
+    selection.clear();
+    rows.forEach(row => {
+      row.querySelector("input[type=checkbox]").checked = false;
+    });
+    updateValue();
+  });
+
+  updateValue();
+
+  return container;
+}
 
 function _world(FileAttachment){return(
 FileAttachment("ne_110m_admin_0_countries_lakes.json").json()
@@ -93,17 +424,8 @@ function _worldGeo(topojson,world,base)
   return json;
 }
 
-
-function _7(md){return(
-md`## Dimensions`
-)}
-
 function _size(width){return(
 Math.min(600, width)
-)}
-
-function _9(md){return(
-md`## Geo`
 )}
 
 function _projection(d3,size){return(
@@ -115,12 +437,8 @@ function _path(d3,projection){return(
 d3.geoPath(projection)
 )}
 
-function _12(md){return(
-md`## Imports`
-)}
-
 function _d3(require){return(
-require("d3-array@2", "d3-geo@1", "d3-inertia@0.1.0", "d3-scale@3", "d3-selection@1")
+require("d3-array@2", "d3-geo@1", "d3-inertia@0.1.0", "d3-scale@3", "d3-selection@1", "d3-transition@1", "d3-ease@1")
 )}
 
 function _geometric(require){return(
@@ -135,25 +453,19 @@ function _topojson(require){return(
 require("topojson@3")
 )}
 
-function _18(md){return(
-md`## Scales`
-)}
-
-function _height(d3,worldGeo){return(
-d3.scaleLinear()
-    .domain([0, d3.max(worldGeo.features, d => d.properties.POP_EST)])
-    .range([0, 200])
-)}
-
-function _20(md){return(
-md`## Styles`
+function _maxPopulation(d3,worldGeo){return(
+d3.max(worldGeo.features, d => d.properties.POP_EST)
 )}
 
 function _styles(){return(
 `
+body {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+}
+
 .globe {
   display: table;
-  margin: 0 auto;
+  margin: 0 auto 2rem;
   overflow: visible;
 }
 .country {
@@ -168,7 +480,6 @@ function _styles(){return(
 }
 .spike {
   fill: red;
-  fill-opacity: 0.3;
   stroke: red;
   transition: opacity 350ms;
 }
@@ -178,11 +489,118 @@ function _styles(){return(
 .spike.hide {
   opacity: 0;
 }
+.spike-label {
+  font-size: 10px;
+  fill: #222;
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.9);
+}
+.spike-label.hide {
+  opacity: 0;
+}
+.control-panel {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 10;
+  background: rgba(255, 255, 255, var(--panel-opacity, 1));
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+  padding: 1rem 1.2rem;
+  width: 260px;
+  display: grid;
+  gap: 0.6rem;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+.control-panel.panel--transparent {
+  backdrop-filter: blur(6px);
+}
+.panel-header {
+  font-weight: 600;
+  font-size: 1rem;
+}
+.control-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+.control-row select,
+.control-row input[type=range] {
+  width: 140px;
+}
+.control-row.checkbox {
+  grid-template-columns: auto 1fr;
+}
+.control-row .value {
+  font-variant-numeric: tabular-nums;
+  min-width: 2.5rem;
+  text-align: right;
+}
+.apply-button {
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  border: none;
+  background: #222;
+  color: #fff;
+  cursor: pointer;
+}
+.apply-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.country-filter {
+  max-width: 760px;
+  margin: 0 auto 3rem;
+  padding: 0 1.5rem;
+}
+.filter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+.filter-actions button {
+  margin-left: 0.4rem;
+}
+.filter-search {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.6rem 0;
+}
+.filter-search input {
+  flex: 1;
+}
+.filter-table {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+.filter-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.filter-table th,
+.filter-table td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid #eee;
+  text-align: left;
+  font-size: 0.9rem;
+}
+.filter-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f7f7f7;
+}
+.filter-count {
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  color: #555;
+}
 `
-)}
-
-function _22(md){return(
-md`## Utilities`
 )}
 
 function _base(polylabel,d3){return(
@@ -248,28 +666,20 @@ export default function define(runtime, observer) {
   ]);
   main.builtin("FileAttachment", runtime.fileAttachments(name => fileAttachments.get(name)));
   main.variable(observer()).define(["md"], _1);
-  main.variable(observer()).define(["d3","size","styles","worldGeo","path","projection","geometric","spike","height","visibility"], _2);
-  main.variable(observer()).define(["toc"], _3);
-  main.variable(observer()).define(["md"], _4);
+  main.variable(observer("viewof settings")).define("viewof settings", ["html"], _viewofSettings);
+  main.variable(observer("viewof countrySelection")).define("viewof countrySelection", ["html","worldGeo"], _viewofCountrySelection);
+  main.variable(observer()).define(["d3","size","styles","worldGeo","path","projection","geometric","spike","viewof settings","viewof countrySelection","maxPopulation","visibility"], _2);
   main.variable(observer("world")).define("world", ["FileAttachment"], _world);
   main.variable(observer("worldGeo")).define("worldGeo", ["topojson","world","base"], _worldGeo);
-  main.variable(observer()).define(["md"], _7);
   main.variable(observer("size")).define("size", ["width"], _size);
-  main.variable(observer()).define(["md"], _9);
   main.variable(observer("projection")).define("projection", ["d3","size"], _projection);
   main.variable(observer("path")).define("path", ["d3","projection"], _path);
-  main.variable(observer()).define(["md"], _12);
   main.variable(observer("d3")).define("d3", ["require"], _d3);
   main.variable(observer("geometric")).define("geometric", ["require"], _geometric);
   main.variable(observer("polylabel")).define("polylabel", ["require"], _polylabel);
   main.variable(observer("topojson")).define("topojson", ["require"], _topojson);
-  const child1 = runtime.module(define1);
-  main.import("toc", child1);
-  main.variable(observer()).define(["md"], _18);
-  main.variable(observer("height")).define("height", ["d3","worldGeo"], _height);
-  main.variable(observer()).define(["md"], _20);
+  main.variable(observer("maxPopulation")).define("maxPopulation", ["d3","worldGeo"], _maxPopulation);
   main.variable(observer("styles")).define("styles", _styles);
-  main.variable(observer()).define(["md"], _22);
   main.variable(observer("base")).define("base", ["polylabel","d3"], _base);
   main.variable(observer("spike")).define("spike", ["geometric"], _spike);
   return main;
